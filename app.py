@@ -1,42 +1,120 @@
-import streamlit as st
+import os
+from typing import List, Tuple
+
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import load_model
+from flask import Flask, render_template, request, jsonify
 from PIL import Image
 
-st.set_page_config(
-    page_title="Eye Disease Prediction",
-    page_icon="👁️",
-    layout="centered",
-)
+try:
+    import tensorflow as tf
+    from tensorflow.keras import layers, models
+    from tensorflow.keras.applications import EfficientNetB0
+except Exception as e:  # pragma: no cover
+    tf = None
 
-st.title("👁️ Eye Disease Prediction")
-st.write("Upload an eye image to predict the presence of disease using a trained deep learning model.")
 
-@st.cache_resource(show_spinner=False)
-def load_eye_model():
-    return load_model('eye_model_final.h5')
+#`tamplete` folder for both templates and static assets
+app = Flask(__name__, template_folder='tamplete', static_folder='tamplete')
 
-model = load_eye_model()
 
-uploaded_file = st.file_uploader("Choose an eye image...", type=["jpg", "jpeg", "png"])
+def load_trained_model(model_path: str, num_classes: int):
+    if tf is None:
+        raise RuntimeError('TensorFlow is not available in the environment.')
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f'Model file not found: {model_path}')
 
-def preprocess_image(image, target_size=(224, 224)):
-    img = image.convert("RGB")
-    img = img.resize(target_size)
-    img_array = np.array(img) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-    return img_array
+    # First try: load full model (architecture + weights)
+    try:
+        return tf.keras.models.load_model(model_path)
+    except Exception:
+        # Fallback: build a compatible architecture and load weights by name, skipping mismatches
+        input_shape = (224, 224, 3)
+        base = EfficientNetB0(include_top=False, weights=None, input_shape=input_shape, pooling='avg')
+        x = base.output
+        output = layers.Dense(num_classes, activation='softmax', name='predictions')(x)
+        model = models.Model(inputs=base.input, outputs=output, name='eye_classifier')
+        try:
+            model.load_weights(model_path, by_name=True, skip_mismatch=True)
+        except Exception as e:
+            raise RuntimeError(f'Failed to load weights from {model_path}: {e}')
+        return model
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-    st.write("Predicting...")
-    input_data = preprocess_image(image)
-    prediction = model.predict(input_data)
-    pred_class = np.argmax(prediction, axis=1)[0] if prediction.shape[-1] > 1 else int(prediction[0][0] > 0.5)
-    st.success(f"Prediction: **{pred_class}**")
-    st.write(f"Raw model output: {prediction.tolist()}")
 
-st.markdown("---")
-st.caption("This is a simplified demo. The model expects images of eyes and outputs a prediction.")
+def get_target_size(model) -> Tuple[int, int]:
+    # Attempt to infer target size from the model input shape (None, H, W, C)
+    try:
+        shape = model.input_shape
+        if isinstance(shape, list):
+            shape = shape[0]
+        _, h, w, _ = shape
+        if isinstance(h, int) and isinstance(w, int):
+            return int(h), int(w)
+    except Exception:
+        pass
+    # Fallback to a common default
+    return 224, 224
+
+
+def preprocess_image(file_storage, target_size: Tuple[int, int]) -> np.ndarray:
+    image = Image.open(file_storage.stream).convert('RGB')
+    image = image.resize(target_size)
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    array = np.expand_dims(array, axis=0)
+    return array
+
+
+# Default class names. Update these to match your trained model's classes.
+CLASS_NAMES: List[str] = [
+    'Cataract',
+    'Diabetic Retinopathy',
+    'Glaucoma',
+    'Normal',
+]
+
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), 'eye_model_final.h5')
+model = load_trained_model(MODEL_PATH, num_classes=len(CLASS_NAMES))
+TARGET_SIZE = get_target_size(model)
+
+
+@app.route('/')
+def index():
+    return render_template('home.html')
+
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image file provided under form field "image".'}), 400
+
+    file_storage = request.files['image']
+    if file_storage.filename == '':
+        return jsonify({'error': 'Empty filename.'}), 400
+
+    try:
+        input_tensor = preprocess_image(file_storage, TARGET_SIZE)
+        preds = model.predict(input_tensor)
+        probs = preds[0].tolist()
+        if len(probs) != len(CLASS_NAMES):
+            # If dimensions mismatch, best-effort to align by truncation/padding
+            length = min(len(probs), len(CLASS_NAMES))
+            probs = probs[:length]
+            classes = CLASS_NAMES[:length]
+        else:
+            classes = CLASS_NAMES
+
+        best_idx = int(np.argmax(probs))
+        response = {
+            'prediction': classes[best_idx],
+            'probabilities': [
+                {'class': cls, 'probability': float(p)} for cls, p in zip(classes, probs)
+            ],
+        }
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+if __name__ == '__main__':
+    # You can change host/port as needed
+    app.run(debug=True)
