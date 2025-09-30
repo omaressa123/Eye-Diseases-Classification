@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Eye Disease Classifier</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='front.css') }}">
+</head>
+<body>
+    <header class="app-header">
+        <div class="container">
+            <h1>Eye Disease Classifier</h1>
+            <p class="subtitle">Upload a retinal image to detect common eye conditions.</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="card upload-card">
+            <form id="uploadForm">
+                <div class="dropzone" id="dropzone">
+                    <input type="file" id="imageInput" name="image" accept="image/*" hidden>
+                    <div class="dropzone-content">
+                        <img id="preview" alt="Preview" class="preview hidden" />
+                        <div class="placeholder">
+                            <span class="icon">📷</span>
+                            <p><strong>Drag & drop</strong> an image here, or</p>
+                            <button type="button" id="browseBtn" class="btn">Browse</button>
+                            <p class="hint">Supported formats: JPG, PNG. Max 10 MB.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button type="submit" class="btn primary" id="predictBtn">Analyze Image</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="card results-card hidden" id="results">
+            <h2>Prediction</h2>
+            <div id="predictionText" class="prediction-text">—</div>
+            <div class="probs" id="probabilities"></div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <div class="container">
+            <small>Not a medical diagnosis. For research/demo purposes.</small>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
